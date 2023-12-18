@@ -16,7 +16,8 @@ clap = { version = "=4.0", features = ["derive"] }
 clap-num = "=1.0.2"
 
 # halo2
-halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2023_02_02" }
+# halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2023_02_02" }
+halo2_proofs = { path = "../halo2-pse/halo2_proofs" }
 
 # Axiom's helper API with basic functions 
 halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib", tag = "v0.3.0-ce" }
@@ -37,9 +38,9 @@ default = []
 # Dev / testing mode. We make opt-level = 3 to improve proving times (otherwise it is really slow)
 [profile.dev]
 opt-level = 3
-debug = 1 # change to 0 or 2 for more or less debug info
+debug = 1              # change to 0 or 2 for more or less debug info
 overflow-checks = true # default
-incremental = true # default
+incremental = true     # default
 
 # Local "release" mode, more optimized than dev but faster to compile than release
 [profile.local]
