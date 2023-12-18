@@ -50,9 +50,9 @@ impl<F: FieldExt> ShipCircuitConfig<F> {
             let eq_sel = meta.query_selector(eq_sel);
 
             vec![
-                eq_sel.clone() * (eq.clone() * eq_inv.clone()),
+                eq_sel.clone() * ((coords.clone() - ship.clone()) * eq_inv.clone()),
                 eq_sel.clone()
-                    * (eq_inv.clone() * (coords.clone() - ship.clone()) + eq
+                    * ((coords.clone() - ship.clone() * eq_inv.clone()) + eq
                         - Expression::Constant(F::from(1))),
             ]
         });
