@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use halo2_proofs::{
     circuit::{AssignedCell, Region, Value},
     halo2curves::FieldExt,
-    plonk::{Advice, Column, ConstraintSystem, Error, Expression, Selector},
+    plonk::{Advice, Column, ConstraintSystem, Error, Expression, Selector, VirtualCells},
     poly::Rotation,
 };
 
@@ -58,27 +58,29 @@ impl<F: FieldExt, const N: usize> Op<F, N> for Mul {
 
 #[derive(Clone, Debug)]
 pub struct FoldlChip<F: FieldExt, const N: usize, OP: Op<F, N>> {
-    xss: [Column<Advice>; N],
-    acc: Column<Advice>,
+    // xss: [Column<Advice>; N],
+    pub acc: Column<Advice>,
     s: Selector,
     _marker: PhantomData<F>,
     _marker2: PhantomData<OP>,
 }
 
 impl<F: FieldExt, const N: usize, OP: Op<F, N>> FoldlChip<F, N, OP> {
-    pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
-        let xss = [(); N].map(|()| meta.advice_column());
-        let acc = meta.advice_column();
+    pub fn configure(
+        meta: &mut ConstraintSystem<F>,
+        xss: impl FnOnce(&mut VirtualCells<'_, F>) -> [Expression<F>; N],
+        acc: Option<Column<Advice>>,
+    ) -> Self {
+        let acc = acc.unwrap_or(meta.advice_column());
         let s = meta.selector();
         meta.create_gate(OP::ANNOTATION, |meta| {
-            let xss = xss.map(|xs| meta.query_advice(xs, Rotation::cur()));
             let acc_curr = meta.query_advice(acc, Rotation::cur());
             let acc_next = meta.query_advice(acc, Rotation::next());
             let s = meta.query_selector(s);
-            vec![s * (acc_next - (OP::expr)(acc_curr, xss))]
+            vec![s * (acc_next - (OP::expr)(acc_curr, xss(meta)))]
         });
         meta.enable_equality(acc);
-        FoldlChip { xss, acc, s, _marker: PhantomData, _marker2: PhantomData }
+        FoldlChip { acc, s, _marker: PhantomData, _marker2: PhantomData }
     }
 
     pub fn assign(
@@ -87,15 +89,15 @@ impl<F: FieldExt, const N: usize, OP: Op<F, N>> FoldlChip<F, N, OP> {
         xss: Vec<[Value<F>; N]>,
     ) -> Result<AssignedCell<F, F>, Error> {
         region.name_column(|| "acc", self.acc);
-        self.xss.into_iter().enumerate().for_each(|(i, xs)| {
-            region.name_column(|| format!("x{}", i), xs);
-        });
+        // self.xss.into_iter().enumerate().for_each(|(i, xs)| {
+        //     region.name_column(|| format!("x{}", i), xs);
+        // });
 
         let mut acc = region.assign_advice(|| "acc/init", self.acc, 0, || OP::init())?;
         xss.into_iter().enumerate().for_each(|(i, xs)| {
-            xs.into_iter().zip(self.xss.iter()).enumerate().for_each(|(j, (x, &c))| {
-                region.assign_advice(|| format!("x{}", j), c, i, || x).unwrap();
-            });
+            // xs.into_iter().zip(self.xss.iter()).enumerate().for_each(|(j, (x, &c))| {
+            //     region.assign_advice(|| format!("x{}", j), c, i, || x).unwrap();
+            // });
             // Consume the iterator using for_each
             self.s.enable(region, i).unwrap();
             let acc_val = OP::wg(acc.value().copied(), xs);
@@ -119,7 +121,8 @@ mod tests {
             circuit::{Layouter, SimpleFloorPlanner, Value},
             dev::MockProver,
             halo2curves::pasta::Fp,
-            plonk::{Circuit, Column, ConstraintSystem, Error, Fixed},
+            plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Fixed},
+            poly::Rotation,
         };
 
         #[derive(Clone)]
@@ -130,6 +133,7 @@ mod tests {
             fc: FoldlChip<Fp, 1, OP>,
             #[allow(dead_code)]
             constant: Column<Fixed>,
+            xs: Column<Advice>,
         }
 
         #[derive(Default)]
@@ -155,14 +159,15 @@ mod tests {
             }
 
             fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
-                let s = meta.selector();
+                let xs = meta.advice_column();
 
-                let fc = FoldlChip::configure(meta);
+                let fc =
+                    FoldlChip::configure(meta, |m| [m.query_advice(xs, Rotation::cur())], None);
 
                 let constant = meta.fixed_column();
                 meta.enable_constant(constant);
 
-                FoldlTestConfig { fc, constant }
+                FoldlTestConfig { fc, xs, constant }
             }
 
             fn synthesize(
@@ -173,8 +178,11 @@ mod tests {
                 layouter.assign_region(
                     || "foldl add",
                     |mut region| {
-                        let xs = self.xs.iter().map(|x| [x.clone()]).collect();
-                        let out = config.fc.assign(&mut region, xs)?;
+                        for (i, &x) in self.xs.iter().enumerate() {
+                            region.assign_advice(|| format!("x{}", i), config.xs, i, || x)?;
+                        }
+                        let xss = self.xs.iter().map(|x| [x.clone()]).collect();
+                        let out = config.fc.assign(&mut region, xss)?;
                         region.constrain_constant(out.cell(), self.out)
                     },
                 )?;
