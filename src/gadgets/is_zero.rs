@@ -16,6 +16,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+use std::marker::PhantomData;
+
 use halo2_proofs::{
     circuit::{Region, Value},
     halo2curves::FieldExt,
@@ -28,13 +30,13 @@ pub struct IsZeroChip<F: FieldExt> {
     // internal signal
     pub value_inv: Column<Advice>,
     // expression
-    pub is_zero_expr: Expression<F>,
+    pub _expr: Expression<F>,
 }
 
 impl<F: FieldExt> IsZeroChip<F> {
     // Output expression
     pub fn expr(&self) -> Expression<F> {
-        self.is_zero_expr.clone()
+        self._expr.clone()
     }
 
     pub fn configure(
@@ -42,7 +44,7 @@ impl<F: FieldExt> IsZeroChip<F> {
         q_enable: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
         value: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
     ) -> Self {
-        let mut is_zero_expr = Expression::Constant(F::zero());
+        let mut _expr = Expression::Constant(F::zero());
         let value_inv = meta.advice_column();
 
         meta.create_gate("is_zero", |meta| {
@@ -54,15 +56,15 @@ impl<F: FieldExt> IsZeroChip<F> {
             //  yes  |   0   |    0       |         1              |  0
             //  yes  |   0   |    y       |         1              |  0
             //
-            let value = value(meta);
+            let value: Expression<F> = value(meta);
             let q_enable = q_enable(meta);
             let value_inv = meta.query_advice(value_inv, Rotation::cur());
 
-            is_zero_expr = Expression::Constant(F::one()) - value.clone() * value_inv;
-            vec![q_enable * value * is_zero_expr.clone()]
+            _expr = Expression::Constant(F::one()) - value.clone() * value_inv;
+            vec![q_enable * value * _expr.clone()]
         });
 
-        IsZeroChip { value_inv, is_zero_expr }
+        IsZeroChip { value_inv, _expr }
     }
 
     pub fn assign(
@@ -72,105 +74,264 @@ impl<F: FieldExt> IsZeroChip<F> {
         value: Value<F>,
     ) -> Result<Value<F>, Error> {
         let value_inv = value.map(|value| value.invert().unwrap_or(F::zero()));
-        region.assign_advice(|| "value inv", self.value_inv, offset, || value_inv)?;
+        region.name_column(|| "inv", self.value_inv);
+        region.assign_advice(|| "inv", self.value_inv, offset, || value_inv)?;
 
         Ok(value.map(|value| if value == F::zero() { F::one() } else { F::zero() }))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AssertNonZeroChip<F: FieldExt> {
+    inv: Column<Advice>,
+    _marker: PhantomData<F>,
+}
+
+impl<F: FieldExt> AssertNonZeroChip<F> {
+    pub fn configure(
+        meta: &mut ConstraintSystem<F>,
+        q_enable: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
+        value: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
+    ) -> Self {
+        let inv = meta.advice_column();
+        meta.create_gate("assert_nonzero", |meta| {
+            let value = value(meta);
+            let q_enable = q_enable(meta);
+            let inv = meta.query_advice(inv, Rotation::cur());
+            vec![q_enable * (Expression::Constant(F::one()) - value * inv)]
+        });
+
+        AssertNonZeroChip { inv, _marker: PhantomData }
+    }
+
+    pub fn assign(
+        &self,
+        region: &mut Region<'_, F>,
+        offset: usize,
+        value: Value<F>,
+    ) -> Result<(), Error> {
+        region.assign_advice(
+            || "inv",
+            self.inv,
+            offset,
+            || value.map(|value| value.invert().unwrap_or(F::zero())),
+        )?;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
 
-    use super::IsZeroChip;
-    use halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner, Value},
-        dev::MockProver,
-        halo2curves::pasta::Fp,
-        plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Instance, Selector},
-        poly::Rotation,
-    };
+    mod test_is_zero {
 
-    #[derive(Clone)]
-    struct MyConfig {
-        izc: IsZeroChip<Fp>,
-        inp: Column<Advice>,
-        out: Column<Advice>,
-        instance: Column<Instance>,
-        selector: Selector,
-    }
+        use crate::gadgets::is_zero::IsZeroChip;
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            dev::MockProver,
+            halo2curves::pasta::Fp,
+            plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Instance, Selector},
+            poly::Rotation,
+        };
 
-    #[derive(Default)]
-    struct MyCircuit {
-        a: Value<Fp>,
-    }
-
-    impl Circuit<Fp> for MyCircuit {
-        type Config = MyConfig;
-        type FloorPlanner = SimpleFloorPlanner;
-        // type Params = ();
-
-        fn without_witnesses(&self) -> Self {
-            Self::default()
+        #[derive(Clone)]
+        struct IsZTestConfig {
+            izc: IsZeroChip<Fp>,
+            inp: Column<Advice>,
+            is_zero: Column<Advice>,
+            instance: Column<Instance>,
+            s: Selector,
         }
 
-        fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
-            let [inp, out] = [(); 2].map(|_| meta.advice_column());
-            [inp, out].map(|col| meta.enable_equality(col));
-
-            let instance = meta.instance_column();
-            meta.enable_equality(instance);
-
-            let selector = meta.selector();
-
-            let izc = IsZeroChip::configure(
-                meta,
-                |meta| meta.query_selector(selector),
-                |meta| meta.query_advice(inp, Rotation::cur()),
-            );
-
-            meta.create_gate("is_zero", |meta| {
-                let out = meta.query_advice(out, Rotation::cur());
-                let s = meta.query_selector(selector);
-                vec![s * (out - izc.expr())]
-            });
-
-            MyConfig { izc, inp, out, instance, selector }
+        #[derive(Default)]
+        struct IsZTestCircuit {
+            a: Value<Fp>,
         }
 
-        fn synthesize(
-            &self,
-            config: Self::Config,
-            mut layouter: impl Layouter<Fp>,
-        ) -> Result<(), Error> {
-            let out = layouter.assign_region(
-                || "",
-                |mut region| {
-                    config.selector.enable(&mut region, 0)?;
-                    let inp = region.assign_advice(|| "load input", config.inp, 0, || self.a)?;
-                    let out_val = config.izc.assign(&mut region, 0, inp.value().copied())?;
-                    let out = region.assign_advice(|| "out", config.out, 0, || out_val)?;
-                    Ok(out)
-                },
-            )?;
-            layouter.constrain_instance(out.cell(), config.instance, 0)?;
-            Ok(())
+        impl Circuit<Fp> for IsZTestCircuit {
+            type Config = IsZTestConfig;
+            type FloorPlanner = SimpleFloorPlanner;
+            // type Params = ();
+
+            fn without_witnesses(&self) -> Self {
+                Self::default()
+            }
+
+            fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
+                let [inp, is_zero] = [(); 2].map(|_| meta.advice_column());
+                [inp, is_zero].map(|col| meta.enable_equality(col));
+
+                let instance = meta.instance_column();
+                meta.enable_equality(instance);
+
+                let s = meta.selector();
+
+                let izc = IsZeroChip::configure(
+                    meta,
+                    |meta| meta.query_selector(s),
+                    |meta| meta.query_advice(inp, Rotation::cur()),
+                );
+
+                meta.create_gate("is_zero", |meta| {
+                    let is_zero = meta.query_advice(is_zero, Rotation::cur());
+                    let s = meta.query_selector(s);
+                    vec![s * (is_zero - izc.expr())]
+                });
+
+                IsZTestConfig { izc, inp, is_zero, instance, s }
+            }
+
+            fn synthesize(
+                &self,
+                config: Self::Config,
+                mut layouter: impl Layouter<Fp>,
+            ) -> Result<(), Error> {
+                let is_zero = layouter.assign_region(
+                    || "",
+                    |mut region| {
+                        config.s.enable(&mut region, 0)?;
+                        let inp =
+                            region.assign_advice(|| "load input", config.inp, 0, || self.a)?;
+                        let is_zero_val =
+                            config.izc.assign(&mut region, 0, inp.value().copied())?;
+                        let is_zero = region.assign_advice(
+                            || "is_zero",
+                            config.is_zero,
+                            0,
+                            || is_zero_val,
+                        )?;
+                        Ok(is_zero)
+                    },
+                )?;
+                layouter.constrain_instance(is_zero.cell(), config.instance, 0)?;
+                Ok(())
+            }
+        }
+
+        #[test]
+        fn test_ok1() {
+            let a = Fp::from(0);
+            let o = Fp::from(1);
+            let p_circuit = IsZTestCircuit { a: Value::known(a) };
+            let public_inputs = vec![o];
+            let prover = MockProver::run(3, &p_circuit, vec![public_inputs]).unwrap();
+            prover.assert_satisfied();
+        }
+
+        #[test]
+        fn test_ok2() {
+            let a = Fp::from(69);
+            let o = Fp::from(0);
+            let p_circuit = IsZTestCircuit { a: Value::known(a) };
+            let public_inputs = vec![o];
+            let prover = MockProver::run(3, &p_circuit, vec![public_inputs]).unwrap();
+            prover.assert_satisfied();
+        }
+
+        #[test]
+        #[should_panic]
+        fn test_panic1() {
+            let a = Fp::from(0);
+            let o = Fp::from(0);
+            let p_circuit = IsZTestCircuit { a: Value::known(a) };
+            let public_inputs = vec![o];
+            let prover = MockProver::run(3, &p_circuit, vec![public_inputs]).unwrap();
+            prover.assert_satisfied();
+        }
+
+        #[test]
+        #[should_panic]
+        fn test_panic2() {
+            let a = Fp::from(69);
+            let o = Fp::from(1);
+            let p_circuit = IsZTestCircuit { a: Value::known(a) };
+            let public_inputs = vec![o];
+            let prover = MockProver::run(3, &p_circuit, vec![public_inputs]).unwrap();
+            prover.assert_satisfied();
         }
     }
 
-    #[test]
-    fn zero() {
-        let a = Fp::from(0);
-        let o = Fp::from(1);
-        let p_circuit = MyCircuit { a: Value::known(a) };
-        let public_inputs = vec![o];
-        let prover = MockProver::run(3, &p_circuit, vec![public_inputs]).unwrap();
-        prover.assert_satisfied();
+    mod test_assert_nonzero {
 
-        let a = Fp::from(69);
-        let o = Fp::from(0);
-        let p_circuit = MyCircuit { a: Value::known(a) };
-        let public_inputs = vec![o];
-        let prover = MockProver::run(3, &p_circuit, vec![public_inputs]).unwrap();
-        prover.assert_satisfied();
+        use crate::gadgets::is_zero::AssertNonZeroChip;
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            dev::MockProver,
+            halo2curves::pasta::Fp,
+            plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Instance, Selector},
+            poly::Rotation,
+        };
+
+        #[derive(Clone)]
+        struct AnZTestConfig {
+            anz: AssertNonZeroChip<Fp>,
+            inp: Column<Advice>,
+            s: Selector,
+        }
+
+        #[derive(Default)]
+        struct AnZTestCircuit {
+            a: Value<Fp>,
+        }
+
+        impl Circuit<Fp> for AnZTestCircuit {
+            type Config = AnZTestConfig;
+            type FloorPlanner = SimpleFloorPlanner;
+            // type Params = ();
+
+            fn without_witnesses(&self) -> Self {
+                Self::default()
+            }
+
+            fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
+                let inp = meta.advice_column();
+                meta.enable_equality(inp);
+
+                let s = meta.selector();
+
+                let anz = AssertNonZeroChip::configure(
+                    meta,
+                    |meta| meta.query_selector(s),
+                    |meta| meta.query_advice(inp, Rotation::cur()),
+                );
+
+                AnZTestConfig { anz, inp, s }
+            }
+
+            fn synthesize(
+                &self,
+                config: Self::Config,
+                mut layouter: impl Layouter<Fp>,
+            ) -> Result<(), Error> {
+                layouter.assign_region(
+                    || "",
+                    |mut region| {
+                        config.s.enable(&mut region, 0)?;
+                        let inp =
+                            region.assign_advice(|| "load input", config.inp, 0, || self.a)?;
+                        config.anz.assign(&mut region, 0, inp.value().copied())?;
+                        Ok(())
+                    },
+                )?;
+                Ok(())
+            }
+        }
+
+        #[test]
+        fn test_ok1() {
+            let a = Fp::from(69);
+            let p_circuit = AnZTestCircuit { a: Value::known(a) };
+            let prover = MockProver::run(3, &p_circuit, vec![]).unwrap();
+            prover.assert_satisfied();
+        }
+
+        #[test]
+        #[should_panic]
+        fn test_panic1() {
+            let a = Fp::from(0);
+            let p_circuit = AnZTestCircuit { a: Value::known(a) };
+            let prover = MockProver::run(3, &p_circuit, vec![]).unwrap();
+            prover.assert_satisfied();
+        }
     }
 }
