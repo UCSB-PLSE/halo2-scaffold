@@ -37,11 +37,10 @@ impl<F: FieldExt> IsEqualChip<F> {
 
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
-        q_enable: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
         x: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
         y: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
     ) -> Self {
-        let is_zero_chip = IsZeroChip::configure(meta, q_enable, |meta| x(meta) - y(meta));
+        let is_zero_chip = IsZeroChip::configure(meta, |meta| x(meta) - y(meta));
 
         IsEqualChip { is_zero_chip }
     }
@@ -71,11 +70,10 @@ impl<F: FieldExt> IsNotEqualChip<F> {
 
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
-        q_enable: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
         x: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
         y: impl FnOnce(&mut VirtualCells<'_, F>) -> Expression<F>,
     ) -> Self {
-        let is_equal = IsEqualChip::configure(meta, q_enable, x, y);
+        let is_equal = IsEqualChip::configure(meta, x, y);
 
         IsNotEqualChip { is_equal }
     }
@@ -142,14 +140,12 @@ mod tests {
 
             let is_equal = IsEqualChip::configure(
                 meta,
-                |meta| meta.query_selector(selector),
                 |meta| meta.query_advice(inp_x, Rotation::cur()),
                 |meta| meta.query_advice(inp_y, Rotation::cur()),
             );
 
             let is_not_equal = IsNotEqualChip::configure(
                 meta,
-                |meta| meta.query_selector(selector),
                 |meta| meta.query_advice(inp_x, Rotation::cur()),
                 |meta| meta.query_advice(inp_y, Rotation::cur()),
             );

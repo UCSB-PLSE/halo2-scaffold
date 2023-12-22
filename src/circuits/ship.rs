@@ -3,86 +3,59 @@ use std::marker::PhantomData;
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     halo2curves::FieldExt,
-    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, Fixed, Selector},
+    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Fixed, Selector},
     poly::Rotation,
 };
 
-// pub struct IsEqualConfig<F: FieldExt> {
-//     _marker: PhantomData<F>,
-//     a: Column<Advice>,
-//     b: Column<Advice>,
-//     eq: Column<Advice>,
-//     eq_inv: Column<Advice>,
-//     eq_sel: Selector,
-//     constant: Column<Fixed>,
-// }
+use crate::gadgets::is_equal::IsEqualChip;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 // it is standard practice to define everything where numbers are in a generic prime field `F` (`FieldExt` are the traits of a prime field)
 pub struct ShipCircuitConfig<F: FieldExt> {
     _marker: PhantomData<F>,
     ship: Column<Advice>,
     coords: Column<Advice>,
-    eq: Column<Advice>,
-    eq_inv: Column<Advice>,
     count: Column<Advice>,
-    eq_sel: Selector,
-    rolling_sum_sel: Selector,
-    // #[allow(dead_code)]
+    is_equal: IsEqualChip<F>,
+    s: Selector,
+    #[allow(dead_code)]
     constant: Column<Fixed>,
 }
 
 impl<F: FieldExt> ShipCircuitConfig<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
-        let [ship, coords, eq, eq_inv, count] = [(); 5].map(|_| meta.advice_column());
+        let [ship, coords, count] = [(); 3].map(|_| meta.advice_column());
 
         let constant = meta.fixed_column();
 
-        let [eq_sel, rolling_sum_sel] = [(); 2].map(|_| meta.selector());
+        let s = meta.selector();
 
-        // specify the columns that you may want to impose equality constraints on cells for (this may include fixed columns)
-        [ship, coords, eq, eq_inv, count].map(|column| meta.enable_equality(column));
+        let is_equal = IsEqualChip::configure(
+            meta,
+            |meta| meta.query_advice(ship, Rotation::cur()),
+            |meta| meta.query_advice(coords, Rotation::cur()),
+        );
+
+        // enable equality constraints
+        [ship, coords, count].map(|column| meta.enable_equality(column));
+
+        // enable constant
         meta.enable_constant(constant);
 
-        meta.create_gate("eq", |meta| {
-            let [ship, coords, eq, eq_inv] =
-                [ship, coords, eq, eq_inv].map(|column| meta.query_advice(column, Rotation::cur()));
-            let eq_sel = meta.query_selector(eq_sel);
+        meta.create_gate("count", |meta| {
+            let count_curr = meta.query_advice(count, Rotation::cur());
+            let count_next = meta.query_advice(count, Rotation::next());
 
+            let s = meta.query_selector(s);
+
+            // count_next = count + is_equal
             vec![
-                eq_sel.clone() * ((coords.clone() - ship.clone()) * eq_inv.clone()),
-                eq_sel.clone()
-                    * ((coords.clone() - ship.clone() * eq_inv.clone()) + eq
-                        - Expression::Constant(F::from(1))),
+                // count_next = count_curr + is_eq
+                s.clone() * (count_next - (count_curr + is_equal.expr())),
             ]
         });
 
-        meta.create_gate("rolling_sum", |meta| {
-            let [eq, count_curr] =
-                [eq, count].map(|column| meta.query_advice(column, Rotation::cur()));
-
-            let [count_next] = [count].map(|column| meta.query_advice(column, Rotation::next()));
-
-            let rolling_sum_sel = meta.query_selector(rolling_sum_sel);
-
-            // count_next = count + (1 - eq)
-            vec![
-                // count_next = count_curr + eq
-                rolling_sum_sel.clone() * (count_curr.clone() + (eq.clone()) - count_next.clone()),
-            ]
-        });
-
-        ShipCircuitConfig {
-            ship,
-            coords,
-            eq,
-            eq_inv,
-            count,
-            eq_sel,
-            rolling_sum_sel,
-            constant,
-            _marker: PhantomData,
-        }
+        ShipCircuitConfig { ship, coords, count, is_equal, s, constant, _marker: PhantomData }
     }
 
     // Config is essentially synonymous with Chip, so we want to build some functionality into this Chip if we want
@@ -118,84 +91,43 @@ impl<F: FieldExt> Circuit<F> for ShipCircuit<F> {
         layouter.assign_region(
             || "",
             |mut region| {
-                // initialize count to 0
-                let mut count = self.count;
+                region.name_column(|| "count", config.count);
+                region.name_column(|| "ship", config.ship);
+                region.name_column(|| "coords", config.coords);
 
-                let count_init = region.assign_advice(
+                // initialize count to 0
+                let mut count = region.assign_advice(
                     || "count",
                     config.count,
                     0,
-                    || Value::known(F::from(count)),
+                    || Value::known(F::from(self.count)),
                 )?;
-                // let zero: halo2_proofs::circuit::AssignedCell<F, F> = region.assign_fixed(
-                //     || "zero",
-                //     config.constant,
-                //     0,
-                //     || Value::known(F::from(0)),
-                // )?;
                 // constrain the initial value of count to be 0
-                // region.constrain_equal(count_init.cell(), zero.cell())?;
-                region.constrain_constant(count_init.cell(), F::from(0))?;
+                region.constrain_constant(count.cell(), F::from(0))?;
+
+                // ship coordinate
+                let s_val = Value::known(F::from(self.ship));
 
                 for row in 0..self.length {
                     // enable selectors
-                    config.eq_sel.enable(&mut region, row)?;
-                    config.rolling_sum_sel.enable(&mut region, row)?;
-
-                    // ship coordinate
-                    let s = self.ship;
+                    config.s.enable(&mut region, row)?;
 
                     // coordinate being compared against
-                    let c = self.coords.get(row).unwrap().clone();
+                    let c_val = Value::known(F::from(self.coords.get(row).unwrap().clone()));
 
                     // assign s to every row in the ship column
-                    region.assign_advice(
-                        || "ship coordinate",
-                        config.ship,
-                        row,
-                        || Value::known(F::from(s)),
-                    )?;
+                    region.assign_advice(|| "ship coordinate", config.ship, row, || s_val)?;
 
                     // assign c to the current row in the coords column
-                    region.assign_advice(
-                        || "compared coordinate",
-                        config.coords,
-                        row,
-                        || Value::known(F::from(c)),
-                    )?;
+                    region.assign_advice(|| "compared coordinate", config.coords, row, || c_val)?;
 
-                    // difference between ship coord and compared coord
-                    let diff = c - s;
+                    let eq_val = config.is_equal.assign(&mut region, row, s_val, c_val)?;
 
-                    if s != c {
-                        region.assign_advice(
-                            || "eq",
-                            config.eq,
-                            row,
-                            || Value::known(F::zero()),
-                        )?;
-                        region.assign_advice(
-                            || "eq_inv",
-                            config.eq_inv,
-                            row,
-                            || Value::known(F::from(diff).invert().unwrap()),
-                        )?;
-                    } else {
-                        count += 1;
-                        region.assign_advice(|| "eq", config.eq, row, || Value::known(F::one()))?;
-                        // println!("The inverse of {:?} is {:?}", diff, diff.invert().unwrap());
-                        region.assign_advice(
-                            || "eq_inv",
-                            config.eq_inv,
-                            row,
-                            || Value::known(F::zero()),
-                        )?;
-                    }
-                    region.assign_advice(
+                    count = region.assign_advice(
                         || "count",
                         config.count,
                         row + 1,
-                        || Value::known(F::from(count)),
+                        || eq_val + count.value().copied(),
                     )?;
                 }
                 Ok(())
@@ -230,10 +162,10 @@ mod test {
 
     #[test]
     fn test_ship() {
-        let K = 14;
-        let n = 10000;
+        let k = 14;
+        let n = 10;
         let circuit = generate_circuit::<Fp>(n);
-        let x = SimpleCircuitCost::<Eq, ShipCircuit<Fp>>::measure(K, &circuit.clone());
+        let x = SimpleCircuitCost::<Eq, ShipCircuit<Fp>>::measure(k, &circuit.clone());
         //     /// Power-of-2 bound on the number of rows in the circuit.
         // pub k: u32,
         // /// Maximum degree of the circuit.
@@ -282,7 +214,7 @@ mod test {
         println!("num_advice_columns: {:?}", x.num_advice_columns);
         // println!("num_instance_columns: {:?}", x.num_instance_columns);
         // println!("num_total_columns: {:?}", x.num_total_columns);
-        let prover = MockProver::run(K, &circuit, vec![]).unwrap();
+        let prover = MockProver::run(k, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
     }
 }
