@@ -76,6 +76,7 @@ impl<F: FieldExt> IsZeroChip<F> {
         x: Value<F>,
     ) -> Result<Value<F>, Error> {
         let x_inv = x.map(|x| x.invert().unwrap_or(F::zero()));
+        self.s.enable(region, offset)?;
         region.name_column(|| "inv", self.x_inv);
         region.assign_advice(|| "inv", self.x_inv, offset, || x_inv)?;
 
