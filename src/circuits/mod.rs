@@ -8,3 +8,4 @@ pub mod is_zero;
 pub mod or;
 pub mod ship;
 pub mod standard_plonk;
+pub mod reduce_fraction;
