@@ -17,7 +17,8 @@ clap-num = "=1.0.2"
 
 # halo2
 # halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2023_02_02" }
-halo2_proofs = { path = "../halo2-pse/halo2_proofs" }
+halo2_proofs = { path = "../halo2-pse/halo2_proofs", features = ["dev-graph"] }
+plotters = "=0.3.0"
 
 # Axiom's helper API with basic functions 
 halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib", tag = "v0.3.0-ce" }

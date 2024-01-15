@@ -151,12 +151,9 @@ pub fn generate_circuit<F: FieldExt>(n: u32) -> ShipCircuit<F> {
 #[cfg(test)]
 mod test {
     use halo2_proofs::{
-        // arithmetic::Field,
-        // circuit::Value,
         dev::{MockProver, SimpleCircuitCost},
         halo2curves::pasta::{Eq, Fp},
     };
-    // use rand::rngs::OsRng;
 
     use super::{generate_circuit, ShipCircuit};
 
@@ -166,54 +163,12 @@ mod test {
         let n = 10;
         let circuit = generate_circuit::<Fp>(n);
         let x = SimpleCircuitCost::<Eq, ShipCircuit<Fp>>::measure(k, &circuit.clone());
-        //     /// Power-of-2 bound on the number of rows in the circuit.
-        // pub k: u32,
-        // /// Maximum degree of the circuit.
-        // pub max_deg: usize,
-        // /// Number of advice columns.
-        // pub advice_columns: usize,
-        // /// Number of direct queries for instance columns.
-        // pub instance_queries: usize,
-        // /// Number of direct queries for advice columns.
-        // pub advice_queries: usize,
-        // /// Number of direct queries for fixed columns.
-        // pub fixed_queries: usize,
-        // /// Number of lookup arguments.
-        // pub lookups: usize,
-        // /// Number of columns in the global permutation.
-        // pub permutation_cols: usize,
-        // /// Number of distinct sets of points in the multiopening argument.
-        // pub point_sets: usize,
-        // /// Maximum rows used over all columns
-        // pub max_rows: usize,
-        // /// Maximum rows used over all advice columns
-        // pub max_advice_rows: usize,
-        // /// Maximum rows used over all fixed columns
-        // pub max_fixed_rows: usize,
-        // /// Number of fixed columns
-        // pub num_fixed_columns: usize,
-        // /// Number of advice columns
-        // pub num_advice_columns: usize,
-        // /// Number of instance columns
-        // pub num_instance_columns: usize,
-        // /// Total number of columns
-        // pub num_total_columns: usize,
-        // println!("k: {:?}", x.k);
-        // println!("max_deg: {:?}", x.max_deg);
-        // println!("advice_columns: {:?}", x.advice_columns);
-        // println!("instance_queries: {:?}", x.instance_queries);
-        // println!("advice_queries: {:?}", x.advice_queries);
-        // println!("fixed_queries: {:?}", x.fixed_queries);
-        // println!("lookups: {:?}", x.lookups);
-        // println!("permutation_cols: {:?}", x.permutation_cols);
-        // println!("point_sets: {:?}", x.point_sets);
-        // println!("max_rows: {:?}", x.max_rows);
         println!("max_advice_rows: {:?}", x.max_advice_rows);
+        println!("num_advice_columns: {:?}", x.num_advice_columns);
+        println!("advice: {}", x.num_advice_columns * x.max_advice_rows);
         println!("max_fixed_rows: {:?}", x.max_fixed_rows);
         println!("num_fixed_columns: {:?}", x.num_fixed_columns);
-        println!("num_advice_columns: {:?}", x.num_advice_columns);
-        // println!("num_instance_columns: {:?}", x.num_instance_columns);
-        // println!("num_total_columns: {:?}", x.num_total_columns);
+        println!("fixed: {}", x.num_fixed_columns * x.max_fixed_rows);
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
     }

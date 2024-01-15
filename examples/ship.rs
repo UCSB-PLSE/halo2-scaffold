@@ -37,48 +37,6 @@ fn run(num_iter: u32, k: u32) {
     use halo2_proofs::halo2curves::pasta::{Eq, Fp};
     let mcircuit: ShipCircuit<Fp> = generate_circuit(num_iter);
     let x = SimpleCircuitCost::<Eq, ShipCircuit<Fp>>::measure(k, &mcircuit);
-    //     /// Power-of-2 bound on the number of rows in the circuit.
-    // pub k: u32,
-    // /// Maximum degree of the circuit.
-    // pub max_deg: usize,
-    // /// Number of advice columns.
-    // pub advice_columns: usize,
-    // /// Number of direct queries for instance columns.
-    // pub instance_queries: usize,
-    // /// Number of direct queries for advice columns.
-    // pub advice_queries: usize,
-    // /// Number of direct queries for fixed columns.
-    // pub fixed_queries: usize,
-    // /// Number of lookup arguments.
-    // pub lookups: usize,
-    // /// Number of columns in the global permutation.
-    // pub permutation_cols: usize,
-    // /// Number of distinct sets of points in the multiopening argument.
-    // pub point_sets: usize,
-    // /// Maximum rows used over all columns
-    // pub max_rows: usize,
-    // /// Maximum rows used over all advice columns
-    // pub max_advice_rows: usize,
-    // /// Maximum rows used over all fixed columns
-    // pub max_fixed_rows: usize,
-    // /// Number of fixed columns
-    // pub num_fixed_columns: usize,
-    // /// Number of advice columns
-    // pub num_advice_columns: usize,
-    // /// Number of instance columns
-    // pub num_instance_columns: usize,
-    // /// Total number of columns
-    // pub num_total_columns: usize,
-    // println!("k: {:?}", x.k);
-    // println!("max_deg: {:?}", x.max_deg);
-    // println!("advice_columns: {:?}", x.advice_columns);
-    // println!("instance_queries: {:?}", x.instance_queries);
-    // println!("advice_queries: {:?}", x.advice_queries);
-    // println!("fixed_queries: {:?}", x.fixed_queries);
-    // println!("lookups: {:?}", x.lookups);
-    // println!("permutation_cols: {:?}", x.permutation_cols);
-    // println!("point_sets: {:?}", x.point_sets);
-    // println!("max_rows: {:?}", x.max_rows);
     println!("advice: {:?}", x.max_advice_rows * x.advice_columns);
     println!("fixed: {:?}", x.max_fixed_rows * x.num_fixed_columns);
 
